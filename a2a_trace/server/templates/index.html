@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🕸️ A2A Trace — Agent Topology</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🕸️</span>
+                <span class="logo-text">A2A Trace</span>
+            </div>
+            <div class="header-stats">
+                <div class="stat">
+                    <span class="stat-value" id="node-count">0</span>
+                    <span class="stat-label">Agents</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value" id="edge-count">0</span>
+                    <span class="stat-label">Connections</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value" id="span-count">0</span>
+                    <span class="stat-label">Spans</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="btn" onclick="refreshData()">
+                    <span>↻</span> Refresh
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Topology View -->
+            <section class="topology-section">
+                <div class="section-header">
+                    <h2>Agent Topology</h2>
+                    <span class="badge" id="topology-time">Last 30 min</span>
+                </div>
+                <div class="topology-container" id="topology-container">
+                    <canvas id="topology-canvas"></canvas>
+                    <div class="topology-empty" id="topology-empty">
+                        <div class="empty-icon">📡</div>
+                        <p>Waiting for trace data...</p>
+                        <p class="empty-hint">Send messages between A2A agents to see the topology</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Trace List -->
+            <section class="traces-section">
+                <div class="section-header">
+                    <h2>Recent Traces</h2>
+                </div>
+                <div class="trace-list" id="trace-list">
+                    <!-- Traces will be rendered here -->
+                </div>
+            </section>
+
+            <!-- Span Details (selected trace) -->
+            <section class="details-section" id="details-section" style="display: none;">
+                <div class="section-header">
+                    <h2>Trace Details</h2>
+                    <button class="btn-close" onclick="closeDetails()">×</button>
+                </div>
+                <div class="span-timeline" id="span-timeline">
+                    <!-- Spans will be rendered here -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Status Bar -->
+        <footer class="statusbar">
+            <span class="status-dot"></span>
+            <span>Connected</span>
+            <span class="separator">·</span>
+            <span id="last-update">Never</span>
+        </footer>
+    </div>
+
+    <script src="/static/js/topology.js"></script>
+    <script>
+        // State
+        let topologyData = { nodes: [], edges: [] };
+        let selectedTraceId = null;
+
+        // Refresh topology data
+        async function refreshData() {
+            try {
+                const response = await fetch('/api/topology');
+                topologyData = await response.json();
+                renderTopology();
+                updateStats();
+                document.getElementById('last-update').textContent = 
+                    'Updated: ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                console.error('Failed to fetch topology:', e);
+            }
+
+            try {
+                const tracesRes = await fetch('/api/traces');
+                const traces = await tracesRes.json();
+                renderTraceList(traces);
+            } catch (e) {
+                console.error('Failed to fetch traces:', e);
+            }
+        }
+
+        // Update header stats
+        function updateStats() {
+            document.getElementById('node-count').textContent = topologyData.nodes.length;
+            document.getElementById('edge-count').textContent = topologyData.edges.length;
+            document.getElementById('span-count').textContent = topologyData.span_count || 0;
+        }
+
+        // Render topology visualization
+        function renderTopology() {
+            const canvas = document.getElementById('topology-canvas');
+            const container = document.getElementById('topology-container');
+            const emptyState = document.getElementById('topology-empty');
+            
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (topologyData.nodes.length === 0) {
+                emptyState.style.display = 'flex';
+                return;
+            }
+            emptyState.style.display = 'none';
+
+            // Calculate node positions (force-directed layout simplified)
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(canvas.width, canvas.height) * 0.35;
+
+            const nodePositions = {};
+            topologyData.nodes.forEach((node, i) => {
+                const angle = (2 * Math.PI * i) / topologyData.nodes.length - Math.PI / 2;
+                nodePositions[node.id] = {
+                    x: centerX + radius * Math.cos(angle),
+                    y: centerY + radius * Math.sin(angle),
+                };
+            });
+
+            // Draw edges
+            ctx.strokeStyle = 'rgba(124, 92, 255, 0.4)';
+            ctx.lineWidth = 2;
+            topologyData.edges.forEach(edge => {
+                const source = nodePositions[edge.source];
+                const target = nodePositions[edge.target];
+                if (source && target) {
+                    ctx.beginPath();
+                    ctx.moveTo(source.x, source.y);
+                    ctx.lineTo(target.x, target.y);
+                    ctx.stroke();
+                    
+                    // Draw arrow
+                    const angle = Math.atan2(target.y - source.y, target.x - source.x);
+                    const arrowLen = 12;
+                    ctx.beginPath();
+                    ctx.moveTo(target.x - 30 * Math.cos(angle), target.y - 30 * Math.sin(angle));
+                    ctx.lineTo(
+                        target.x - 30 * Math.cos(angle) - arrowLen * Math.cos(angle - 0.5),
+                        target.y - 30 * Math.sin(angle) - arrowLen * Math.sin(angle - 0.5)
+                    );
+                    ctx.moveTo(target.x - 30 * Math.cos(angle), target.y - 30 * Math.sin(angle));
+                    ctx.lineTo(
+                        target.x - 30 * Math.cos(angle) - arrowLen * Math.cos(angle + 0.5),
+                        target.y - 30 * Math.sin(angle) - arrowLen * Math.sin(angle + 0.5)
+                    );
+                    ctx.stroke();
+                }
+            });
+
+            // Draw nodes
+            topologyData.nodes.forEach((node, i) => {
+                const pos = nodePositions[node.id];
+                const hasError = node.error_count > 0;
+                
+                // Glow
+                const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, 40);
+                gradient.addColorStop(0, hasError ? 'rgba(233, 69, 96, 0.3)' : 'rgba(124, 92, 255, 0.3)');
+                gradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 40, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Node circle
+                ctx.fillStyle = hasError ? '#e94560' : '#7c5cff';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 24, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Border
+                ctx.strokeStyle = hasError ? '#ff6b81' : '#9b7dff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Label
+                ctx.fillStyle = '#e8e8f0';
+                ctx.font = '12px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(node.name, pos.x, pos.y + 44);
+                
+                // Span count
+                ctx.fillStyle = '#9090b0';
+                ctx.font = '10px Roboto Mono, monospace';
+                ctx.fillText(`${node.span_count} spans`, pos.x, pos.y + 58);
+            });
+        }
+
+        // Render trace list
+        function renderTraceList(traces) {
+            const list = document.getElementById('trace-list');
+            if (traces.length === 0) {
+                list.innerHTML = '<div class="empty-list">No traces yet</div>';
+                return;
+            }
+
+            list.innerHTML = traces.map(t => `
+                <div class="trace-item" onclick="selectTrace('${t.trace_id}')">
+                    <div class="trace-id">${t.trace_id.slice(0, 12)}...</div>
+                    <div class="trace-meta">
+                        <span>${t.span_count} spans</span>
+                        <span>·</span>
+                        <span>${t.services.join(' → ')}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Select a trace to view details
+        async function selectTrace(traceId) {
+            selectedTraceId = traceId;
+            document.getElementById('details-section').style.display = 'block';
+            
+            try {
+                const res = await fetch(`/api/trace/${traceId}`);
+                const spans = await res.json();
+                renderSpanTimeline(spans);
+            } catch (e) {
+                console.error('Failed to fetch trace:', e);
+            }
+        }
+
+        // Render span timeline
+        function renderSpanTimeline(spans) {
+            const container = document.getElementById('span-timeline');
+            if (spans.length === 0) {
+                container.innerHTML = '<p>No spans</p>';
+                return;
+            }
+
+            const minTime = Math.min(...spans.map(s => s.timestamp));
+            const maxTime = Math.max(...spans.map(s => s.timestamp + (s.duration_ms || 100) / 1000));
+            const duration = maxTime - minTime || 1;
+
+            container.innerHTML = spans.map(span => {
+                const startPct = ((span.timestamp - minTime) / duration) * 100;
+                const widthPct = Math.max(2, ((span.duration_ms || 100) / 1000 / duration) * 100);
+                const isError = span.span_type === 'error';
+                
+                return `
+                    <div class="span-row ${isError ? 'error' : ''}">
+                        <div class="span-label">${span.service_name}</div>
+                        <div class="span-bar-container">
+                            <div class="span-bar" style="left: ${startPct}%; width: ${widthPct}%; background: ${isError ? '#e94560' : '#7c5cff'};">
+                                <span class="span-duration">${span.duration_ms || 0}ms</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function closeDetails() {
+            document.getElementById('details-section').style.display = 'none';
+            selectedTraceId = null;
+        }
+
+        // Auto-refresh
+        refreshData();
+        setInterval(refreshData, 5000);
+        
+        // Resize handler
+        window.addEventListener('resize', () => {
+            if (topologyData.nodes.length > 0) {
+                renderTopology();
+            }
+        });
+    </script>
+</body>
+</html>
